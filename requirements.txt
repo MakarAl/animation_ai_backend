@@ -1,0 +1,43 @@
+# Core dependencies
+torch>=1.9.0
+torchvision>=0.10.0
+numpy>=1.21.0
+Pillow>=8.3.0
+opencv-python>=4.5.0
+scipy>=1.7.0
+matplotlib>=3.4.0
+tqdm>=4.62.0
+imageio>=2.9.0
+imageio-ffmpeg>=0.4.5
+scikit-image>=0.18.0
+einops>=0.3.0
+timm>=0.4.12
+lpips>=0.1.4
+pytorch-msssim>=0.2.1
+
+# Model-specific dependencies
+easydict>=1.9.0
+pyyaml>=5.4.0
+networkx>=2.5.0
+rdp>=0.8.0
+scikit-learn>=0.24.0
+scikit-network>=0.20.0
+
+# TPS-Inbetween specific dependencies
+kornia>=0.5.0
+pytlsd>=0.1.0
+torchmetrics>=0.7.0
+POT>=0.8.0  # Python Optimal Transport
+cupy-cuda11x>=10.0.0  # For CUDA support (adjust version as needed)
+# cupy-cuda12x>=12.0.0  # For CUDA 12.x support
+# cupy-cuda11x>=10.0.0  # For CUDA 11.x support
+
+# Jupyter notebook support
+jupyter>=1.0.0
+ipywidgets>=7.6.0
+
+# Optional: CUDA support (install separately if needed)
+# torch-cuda>=1.9.0
+
+# Optional: Additional image processing
+imageio-ffmpeg>=0.4.0 
