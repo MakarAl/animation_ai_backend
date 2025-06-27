@@ -1,6 +1,7 @@
 import os
 import sys
 import torch
+import torch.nn.functional as F
 import cv2
 import numpy as np
 from PIL import Image
@@ -56,6 +57,10 @@ class TPSInbetweenWrapper:
             else:
                 self.device = 'cpu'
         
+        # TPS-Inbetween does not support MPS, so fall back to CPU
+        if self.device == 'mps':
+            print('MPS not supported for TPS-Inbetween, falling back to CPU.')
+            self.device = 'cpu'
         self.model_path = model_path
         self.matching_model = None
         self.inbetween_model = None
@@ -104,7 +109,14 @@ class TPSInbetweenWrapper:
         # Create args object for the model
         class Args:
             def __init__(self, device):
-                self.cpu = device == 'cpu'
+                # Handle device selection properly
+                if device == 'cpu':
+                    self.cpu = True
+                elif device == 'mps':
+                    # MPS doesn't support all operations, fall back to CPU for TPS
+                    self.cpu = True
+                else:
+                    self.cpu = False
                 self.xN = 1  # Default to 1 intermediate frame
                 self.device = device
         
@@ -115,6 +127,34 @@ class TPSInbetweenWrapper:
         self.inbetween_model = self.inbetween_model.to(self.device).eval()
         
         print("Models loaded successfully!")
+    
+    def _pad_to_multiple_of_8(self, tensor):
+        """
+        Pad tensor to the nearest multiple of 8 to avoid size mismatches in IFNet.
+        The IFNet model uses multiple 2x downsampling operations, so dimensions must be multiples of 8.
+        """
+        b, c, h, w = tensor.shape
+        
+        # Calculate padding needed to reach nearest multiple of 8
+        pad_h = (8 - h % 8) % 8
+        pad_w = (8 - w % 8) % 8
+        
+        if pad_h == 0 and pad_w == 0:
+            return tensor, (0, 0, 0, 0)  # No padding needed
+        
+        # Pad with reflection to avoid edge artifacts
+        padded_tensor = F.pad(tensor, (0, pad_w, 0, pad_h), mode='reflect')
+        
+        return padded_tensor, (0, pad_w, 0, pad_h)
+    
+    def _crop_to_original_size(self, tensor, original_h, original_w):
+        """Crop tensor back to original size after processing."""
+        b, c, h, w = tensor.shape
+        if h == original_h and w == original_w:
+            return tensor
+        
+        # Crop from top-left to original size
+        return tensor[:, :, :original_h, :original_w]
     
     def _img_open_torch(self, img_path, max_size=512, gray=True):
         """Load and preprocess image for torch. Aspect-ratio resize to fit max_size."""
@@ -153,6 +193,12 @@ class TPSInbetweenWrapper:
         flow_norm[:, 0] = flow_norm[:, 0] / w
         flow_norm[:, 1] = flow_norm[:, 1] / h
         return flow_norm
+    
+    def _crop_to_min_size(self, tensor_a, tensor_b):
+        """Crop two tensors to their minimum common height and width."""
+        h = min(tensor_a.shape[2], tensor_b.shape[2])
+        w = min(tensor_a.shape[3], tensor_b.shape[3])
+        return tensor_a[:, :, :h, :w], tensor_b[:, :, :h, :w]
     
     def _generate_matches(self, img0_path, img1_path, temp_dir='./temp', max_image_size=512):
         os.makedirs(temp_dir, exist_ok=True)
@@ -226,6 +272,20 @@ class TPSInbetweenWrapper:
         print("Generating matches between images...")
         matches_path, torch_gray0, torch_gray1 = self._generate_matches(img0_path, img1_path, temp_dir, max_image_size)
         
+        # Store original dimensions for cropping back
+        original_h, original_w = torch_gray0.shape[2], torch_gray0.shape[3]
+        
+        # Pad images to multiples of 8 to avoid IFNet size mismatches
+        print(f"Padding images from {original_h}x{original_w} to multiples of 8...")
+        torch_gray0_padded, pad_info = self._pad_to_multiple_of_8(torch_gray0)
+        torch_gray1_padded, _ = self._pad_to_multiple_of_8(torch_gray1)
+        
+        padded_h, padded_w = torch_gray0_padded.shape[2], torch_gray0_padded.shape[3]
+        print(f"Padded to {padded_h}x{padded_w} (multiple of 8)")
+        
+        # Crop both tensors to minimum common size to avoid rounding issues
+        torch_gray0_padded, torch_gray1_padded = self._crop_to_min_size(torch_gray0_padded, torch_gray1_padded)
+        
         # Update model to generate requested number of frames
         # Note: The model expects xN+1 total frames, so we need num_frames+1
         # But we need to handle the case where num_frames=1 specially
@@ -235,12 +295,16 @@ class TPSInbetweenWrapper:
         else:
             self.inbetween_model.times = torch.linspace(0, 1, num_frames + 1)[1:-1].to(self.device)
         
-        # Generate inbetween frames
+        # Generate inbetween frames with padded images
         print(f"Generating {num_frames} inbetween frames...")
         with torch.no_grad():
-            pred, _ = self.inbetween_model(1 - torch_gray0, 1 - torch_gray1, [matches_path])
+            pred, _ = self.inbetween_model(1 - torch_gray0_padded, 1 - torch_gray1_padded, [matches_path])
         
         pred = [1 - p for p in pred]
+        
+        # Crop back to original size
+        print(f"Cropping results back to original size {original_h}x{original_w}...")
+        pred = [self._crop_to_original_size(p, original_h, original_w) for p in pred]
         
         # Verify we got the expected number of frames
         if len(pred) != num_frames:
@@ -291,6 +355,12 @@ class TPSInbetweenWrapper:
             print(f"GIF saved to: {gif_path}")
         return output_path
     
+    def _crop_pil_images_to_min_size(self, pil_images):
+        """Crop a list of PIL images to the minimum common size."""
+        min_w = min(img.width for img in pil_images)
+        min_h = min(img.height for img in pil_images)
+        return [img.crop((0, 0, min_w, min_h)) for img in pil_images]
+    
     def _create_simple_gif(self, torch_gray0, pred, torch_gray1, output_path, duration=0.05):
         """Create a simple GIF with input0, inbetween, input1."""
         # Create frames directory
@@ -298,32 +368,30 @@ class TPSInbetweenWrapper:
         frames_dir = os.path.join(frames_dir, 'gif_frames')
         os.makedirs(frames_dir, exist_ok=True)
         
-        # Save all frames
-        frame_paths = []
-        
+        # Save all frames as PIL images first
+        pil_frames = []
         # Save input frame 0
-        frame0_path = os.path.join(frames_dir, 'frame_0.png')
-        torchvision.transforms.ToPILImage()(torch_gray0.float().squeeze(0)).save(frame0_path)
-        frame_paths.append(frame0_path)
-        
+        pil_frame0 = torchvision.transforms.ToPILImage()(torch_gray0.float().squeeze(0))
+        pil_frames.append(pil_frame0)
         # Save intermediate frames
-        for idx, frame in enumerate(pred):
-            frame_path = os.path.join(frames_dir, f'frame_{idx+1}.png')
-            torchvision.transforms.ToPILImage()(frame.float().squeeze(0)).save(frame_path)
-            frame_paths.append(frame_path)
-        
+        for frame in pred:
+            pil_frame = torchvision.transforms.ToPILImage()(frame.float().squeeze(0))
+            pil_frames.append(pil_frame)
         # Save input frame 1
-        frame1_path = os.path.join(frames_dir, f'frame_{len(pred)+1}.png')
-        torchvision.transforms.ToPILImage()(torch_gray1.float().squeeze(0)).save(frame1_path)
-        frame_paths.append(frame1_path)
-        
+        pil_frame1 = torchvision.transforms.ToPILImage()(torch_gray1.float().squeeze(0))
+        pil_frames.append(pil_frame1)
+        # Crop all frames to min size
+        pil_frames = self._crop_pil_images_to_min_size(pil_frames)
+        # Save frames to disk and collect paths
+        frame_paths = []
+        for idx, pil_frame in enumerate(pil_frames):
+            frame_path = os.path.join(frames_dir, f'frame_{idx}.png')
+            pil_frame.save(frame_path)
+            frame_paths.append(frame_path)
         # Create GIF
         gif_path = output_path.replace('.png', '.gif')
-        frames = []
-        for frame_path in frame_paths:
-            frames.append(imageio.v2.imread(frame_path))
+        frames = [imageio.v2.imread(frame_path) for frame_path in frame_paths]
         imageio.mimsave(gif_path, frames, duration=duration)
-        
         return gif_path
     
     def interpolate_sequence(self, img0_path, img1_path, output_dir=None, num_frames=30, 

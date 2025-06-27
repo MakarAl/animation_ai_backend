@@ -72,14 +72,24 @@ class Unet(nn.Module):
         self.conv = nn.Conv2d(c, 3, 3, 1, 1)
 
     def forward(self, img0, img1, warped_img0, warped_img1, mask, flow, c0, c1):
-        s0 = self.down0(torch.cat((img0, img1, warped_img0, warped_img1, mask, flow), 1))
-        s1 = self.down1(torch.cat((s0, c0[0], c1[0]), 1))
-        s2 = self.down2(torch.cat((s1, c0[1], c1[1]), 1))
-        s3 = self.down3(torch.cat((s2, c0[2], c1[2]), 1))
-        x = self.up0(torch.cat((s3, c0[3], c1[3]), 1))
-        x = self.up1(torch.cat((x, s2), 1)) 
-        x = self.up2(torch.cat((x, s1), 1)) 
-        x = self.up3(torch.cat((x, s0), 1)) 
+        # Down path
+        d0_inputs = crop_to_min_size(img0, img1, warped_img0, warped_img1, mask, flow)
+        s0 = self.down0(torch.cat(d0_inputs, 1))
+        d1_inputs = crop_to_min_size(s0, c0[0], c1[0])
+        s1 = self.down1(torch.cat(d1_inputs, 1))
+        d2_inputs = crop_to_min_size(s1, c0[1], c1[1])
+        s2 = self.down2(torch.cat(d2_inputs, 1))
+        d3_inputs = crop_to_min_size(s2, c0[2], c1[2])
+        s3 = self.down3(torch.cat(d3_inputs, 1))
+        # Up path
+        u0_inputs = crop_to_min_size(s3, c0[3], c1[3])
+        x = self.up0(torch.cat(u0_inputs, 1))
+        u1_inputs = crop_to_min_size(x, s2)
+        x = self.up1(torch.cat(u1_inputs, 1))
+        u2_inputs = crop_to_min_size(x, s1)
+        x = self.up2(torch.cat(u2_inputs, 1))
+        u3_inputs = crop_to_min_size(x, s0)
+        x = self.up3(torch.cat(u3_inputs, 1))
         x = self.conv(x)
         return torch.sigmoid(x)
 
@@ -108,6 +118,8 @@ class IFBlock(nn.Module):
             x = F.interpolate(x, scale_factor = 1. / scale, mode="bilinear", align_corners=False)
         if flow != None:
             flow = F.interpolate(flow, scale_factor = 1. / scale, mode="bilinear", align_corners=False) * 1. / scale
+            # Crop x and flow to min size before concatenation
+            x, flow = crop_to_min_size(x, flow)
             x = torch.cat((x, flow), 1)
         x = self.conv0(x)
         x = self.convblock(x) + x
@@ -117,6 +129,12 @@ class IFBlock(nn.Module):
         mask = tmp[:, 4:5]
         return flow, mask
     
+def crop_to_min_size(*tensors):
+    """Crop all tensors to the minimum common height and width."""
+    min_h = min(t.shape[2] for t in tensors)
+    min_w = min(t.shape[3] for t in tensors)
+    return [t[:, :, :min_h, :min_w] for t in tensors]
+
 class IFNet(nn.Module):
     def __init__(self):
         super(IFNet, self).__init__()
@@ -142,35 +160,54 @@ class IFNet(nn.Module):
         stu = [self.block0, self.block1, self.block2]
         for i in range(3):
             if flow != None:
-                flow_d, mask_d = stu[i](torch.cat((img0, img1, warped_img0, warped_img1, mask), 1), flow, scale=scale[i])
+                # Crop all tensors to min size before concatenation
+                img0_c, img1_c, warped_img0_c, warped_img1_c, mask_c = crop_to_min_size(img0, img1, warped_img0, warped_img1, mask)
+                flow_d, mask_d = stu[i](torch.cat((img0_c, img1_c, warped_img0_c, warped_img1_c, mask_c), 1), flow, scale=scale[i])
+                # Crop flow and flow_d, mask and mask_d to min size before addition
+                flow, flow_d = crop_to_min_size(flow, flow_d)
+                mask, mask_d = crop_to_min_size(mask, mask_d)
                 flow = flow + flow_d
                 mask = mask + mask_d
             else:
-                flow, mask = stu[i](torch.cat((img0, img1), 1), None, scale=scale[i])
+                img0_c, img1_c = crop_to_min_size(img0, img1)
+                flow, mask = stu[i](torch.cat((img0_c, img1_c), 1), None, scale=scale[i])
             mask_list.append(torch.sigmoid(mask))
             flow_list.append(flow)
-            warped_img0 = warp(img0, flow[:, :2])
-            warped_img1 = warp(img1, flow[:, 2:4])
+            # Crop for warping
+            img0_w, flow_w0 = crop_to_min_size(img0, flow[:, :2])
+            img1_w, flow_w1 = crop_to_min_size(img1, flow[:, 2:4])
+            warped_img0 = warp(img0_w, flow_w0)
+            warped_img1 = warp(img1_w, flow_w1)
             merged_student = (warped_img0, warped_img1)
             merged.append(merged_student)
         if gt.shape[1] == 3:
-            flow_d, mask_d = self.block_tea(torch.cat((img0, img1, warped_img0, warped_img1, mask, gt), 1), flow, scale=1)
+            img0_c, img1_c, warped_img0_c, warped_img1_c, mask_c, gt_c = crop_to_min_size(img0, img1, warped_img0, warped_img1, mask, gt)
+            flow_d, mask_d = self.block_tea(torch.cat((img0_c, img1_c, warped_img0_c, warped_img1_c, mask_c, gt_c), 1), flow, scale=1)
+            img0_w, flow_w0 = crop_to_min_size(img0, flow_d[:, :2])
+            img1_w, flow_w1 = crop_to_min_size(img1, flow_d[:, 2:4])
             flow_teacher = flow + flow_d
-            warped_img0_teacher = warp(img0, flow_teacher[:, :2])
-            warped_img1_teacher = warp(img1, flow_teacher[:, 2:4])
+            warped_img0_teacher = warp(img0_w, flow_w0)
+            warped_img1_teacher = warp(img1_w, flow_w1)
             mask_teacher = torch.sigmoid(mask + mask_d)
             merged_teacher = warped_img0_teacher * mask_teacher + warped_img1_teacher * (1 - mask_teacher)
         else:
             flow_teacher = None
             merged_teacher = None
         for i in range(3):
-            merged[i] = merged[i][0] * mask_list[i] + merged[i][1] * (1 - mask_list[i])
+            m0, m1, mask_c = crop_to_min_size(merged[i][0], merged[i][1], mask_list[i])
+            merged[i] = m0 * mask_c + m1 * (1 - mask_c)
             if gt.shape[1] == 3:
-                loss_mask = ((merged[i] - gt).abs().mean(1, True) > (merged_teacher - gt).abs().mean(1, True) + 0.01).float().detach()
+                m_merged, m_teacher, m_gt = crop_to_min_size(merged[i], merged_teacher, gt)
+                loss_mask = ((m_merged - m_gt).abs().mean(1, True) > (m_teacher - m_gt).abs().mean(1, True) + 0.01).float().detach()
                 loss_distill += (((flow_teacher.detach() - flow_list[i]) ** 2).mean(1, True) ** 0.5 * loss_mask).mean()
         c0 = self.contextnet(img0, flow[:, :2])
         c1 = self.contextnet(img1, flow[:, 2:4])
-        tmp = self.unet(img0, img1, warped_img0, warped_img1, mask, flow, c0, c1)
+        # Crop context features to min size
+        c0 = [f[:, :, :min(c0[0].shape[2], c1[0].shape[2]), :min(c0[0].shape[3], c1[0].shape[3])] for f in c0]
+        c1 = [f[:, :, :min(c0[0].shape[2], c1[0].shape[2]), :min(c0[0].shape[3], c1[0].shape[3])] for f in c1]
+        img0_c, img1_c, warped_img0_c, warped_img1_c, mask_c, flow_c = crop_to_min_size(img0, img1, warped_img0, warped_img1, mask, flow)
+        tmp = self.unet(img0_c, img1_c, warped_img0_c, warped_img1_c, mask_c, flow_c, c0, c1)
         res = tmp[:, :3] * 2 - 1
-        merged[2] = torch.clamp(merged[2] + res, 0, 1)
+        m2, r2 = crop_to_min_size(merged[2], res)
+        merged[2] = torch.clamp(m2 + r2, 0, 1)
         return flow_list[2], mask_list[2], merged[2], flow_teacher, merged_teacher, loss_distill

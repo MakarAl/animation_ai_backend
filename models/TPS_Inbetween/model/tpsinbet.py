@@ -8,6 +8,13 @@ from model.warplayer import warp
 from model.IFNet import IFNet
 
 
+def crop_to_min_size(*tensors):
+    """Crop all tensors to the minimum common height and width."""
+    min_h = min(t.shape[2] for t in tensors)
+    min_w = min(t.shape[3] for t in tensors)
+    return [t[:, :, :min_h, :min_w] for t in tensors]
+
+
 class TPS_inbet(nn.Module):
     def __init__(self, args):
         super(TPS_inbet, self).__init__()
@@ -100,7 +107,9 @@ class TPS_inbet(nn.Module):
             # synthesize frames
             refine_out = self.unet(x0, x1, coarse_flow0t+flow_bet_coar[:, :2], coarse_flow1t+flow_bet_coar[:, 2:4], fine_I0t, fine_I1t, m, feats0, feats1)
             res = refine_out[:, 0:1, :, :]*2 - 1
-            It =  (1-t)*fine_I0t + t*fine_I1t + res
+            # Crop all tensors to min size before addition
+            fine_I0t_c, fine_I1t_c, res_c = crop_to_min_size(fine_I0t, fine_I1t, res)
+            It =  (1-t)*fine_I0t_c + t*fine_I1t_c + res_c
 
             It = torch.clamp(It, 0, 1)
             coarseI_m.append(coarse_I0t)
@@ -175,13 +184,23 @@ class Unet(nn.Module):
         self.conv = nn.Conv2d(c, outdim, 3, 1, 1)
 
     def forward(self, img0, img1, flow0, flow1, warped_img0, warped_img1, mask, c0, c1):
-        s0 = self.down0(torch.cat((img0, img1, warped_img0, warped_img1, flow0, flow1, mask), 1))
-        s1 = self.down1(torch.cat((s0, c0[0], c1[0]), 1))
-        s2 = self.down2(torch.cat((s1, c0[1], c1[1]), 1))
-        s3 = self.down3(torch.cat((s2, c0[2], c1[2]), 1))
-        x = self.up0(torch.cat((s3, c0[3], c1[3]), 1))
-        x = self.up1(torch.cat((x, s2), 1)) 
-        x = self.up2(torch.cat((x, s1), 1)) 
-        x = self.up3(torch.cat((x, s0), 1)) 
+        # Down path
+        d0_inputs = crop_to_min_size(img0, img1, warped_img0, warped_img1, flow0, flow1, mask)
+        s0 = self.down0(torch.cat(d0_inputs, 1))
+        d1_inputs = crop_to_min_size(s0, c0[0], c1[0])
+        s1 = self.down1(torch.cat(d1_inputs, 1))
+        d2_inputs = crop_to_min_size(s1, c0[1], c1[1])
+        s2 = self.down2(torch.cat(d2_inputs, 1))
+        d3_inputs = crop_to_min_size(s2, c0[2], c1[2])
+        s3 = self.down3(torch.cat(d3_inputs, 1))
+        # Up path
+        u0_inputs = crop_to_min_size(s3, c0[3], c1[3])
+        x = self.up0(torch.cat(u0_inputs, 1))
+        u1_inputs = crop_to_min_size(x, s2)
+        x = self.up1(torch.cat(u1_inputs, 1))
+        u2_inputs = crop_to_min_size(x, s1)
+        x = self.up2(torch.cat(u2_inputs, 1))
+        u3_inputs = crop_to_min_size(x, s0)
+        x = self.up3(torch.cat(u3_inputs, 1))
         x = self.conv(x)
         return torch.sigmoid(x)

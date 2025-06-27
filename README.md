@@ -365,3 +365,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ---
 
 **Happy animating! 🎬✨** 
+
+## Model-Specific Notes
+
+### TPS Inbetween
+- **Now supports arbitrary image sizes**: You can use any reasonable width/height (e.g., 720, 1080, etc.), not just powers of 2. The backend robustly handles all tensor and output frame sizes internally, so you won't encounter size mismatch errors.
+- Robust cropping logic is implemented throughout the model and wrapper to ensure all tensors and output frames are always the same size before any operation that requires it.
