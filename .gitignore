@@ -34,6 +34,11 @@ models/*/ckp/checkpoints/
 models/*/train_log/
 models/*/weights/
 models/*/pretrained/
+models/*/resources/weights/
+models/*/model/resources/weights/
+*.tar
+*.tar.gz
+*.zip
 
 # Output files
 test_outputs/
