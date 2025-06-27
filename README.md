@@ -351,14 +351,6 @@ python example_usage_sain_enhanced.py \
     --noise-amplitude 0.1
 ```
 
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test with multiple models
-5. Submit a pull request
-
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
@@ -369,13 +361,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - **RIFE**: Real-time Intermediate Flow Estimation team
 - **SAIN**: Sketch-Aware Interpolation Network researchers
 - **AnimeInbet**: Deep Geometrized Cartoon Line Inbetweening team
-
-## 📞 Support
-
-For issues and questions:
-1. Check the troubleshooting section
-2. Review existing GitHub issues
-3. Create a new issue with detailed information
 
 ---
 
