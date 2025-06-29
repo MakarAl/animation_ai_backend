@@ -14,9 +14,9 @@ import math
 from collections import OrderedDict
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
-from model.warplayer import warp
-from model.CSB import CSB
-from model.CCB import CCB
+from warplayer import warp
+from CSB import CSB
+from CCB import CCB
 
 
 def make_layer(block, n_layers):

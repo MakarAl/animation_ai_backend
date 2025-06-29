@@ -21,6 +21,10 @@ sys.path.insert(0, models_dir)
 
 from SAIN import SAIN
 
+sain_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'models', 'SAIN')
+if sain_dir not in sys.path:
+    sys.path.insert(0, sain_dir)
+
 
 def get_best_device():
     """

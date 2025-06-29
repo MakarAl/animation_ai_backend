@@ -37,6 +37,8 @@ class IFBlock(nn.Module):
         self.lastconv = nn.ConvTranspose2d(c, 5, 4, 2, 1)
 
     def forward(self, x, flow, scale):
+        if isinstance(scale, torch.Tensor):
+            scale = scale.item()
         if scale != 1:
             x = F.interpolate(x, scale_factor = 1. / scale, mode="bilinear", align_corners=False)
         if flow != None:

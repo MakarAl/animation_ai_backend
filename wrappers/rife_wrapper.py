@@ -16,7 +16,12 @@ warnings.filterwarnings("ignore")
 current_dir = os.path.dirname(os.path.abspath(__file__))
 models_dir = os.path.join(os.path.dirname(current_dir), 'models', 'RIFE')
 # Patch sys.path for model imports
-sys.path.insert(0, models_dir)  # Add models/RIFE/ so 'model' and 'train_log' are importable
+if models_dir not in sys.path:
+    sys.path.insert(0, models_dir)  # Add models/RIFE/ so 'model' and 'train_log' are importable
+    # Also add the model subdirectory for imports like 'model.loss'
+    model_subdir = os.path.join(models_dir, 'model')
+    if model_subdir not in sys.path:
+        sys.path.insert(0, model_subdir)
 
 class RIFEInterpolator:
     """
@@ -55,15 +60,18 @@ class RIFEInterpolator:
 
     def _load_model(self):
         """Load the appropriate RIFE model based on available files."""
+        old_cwd = os.getcwd()
+        rife_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'models', 'RIFE')
         try:
-            # Try HDv3 model first (most recent)
+            os.chdir(rife_dir)
+            # Try HDv3 model first (matches the checkpoint)
             from train_log.RIFE_HDv3 import Model
             model = Model()
             model.load_model(self.model_dir, -1)
             print("Loaded v3.x HD model.")
         except ImportError:
             try:
-                # Try base RIFE model
+                # Try base RIFE model as fallback
                 from model.RIFE import Model
                 model = Model()
                 model.load_model(self.model_dir, -1)
@@ -74,6 +82,8 @@ class RIFEInterpolator:
                 print(f"  - {os.path.join(models_dir, 'model/RIFE.py')}")
                 print(f"  - {os.path.join(models_dir, 'train_log/RIFE_HDv3.py')}")
                 raise
+        finally:
+            os.chdir(old_cwd)
         return model
 
     def _load_image(self, image_path: Union[str, np.ndarray], max_size: int = 720) -> torch.Tensor:

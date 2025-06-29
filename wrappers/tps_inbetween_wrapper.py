@@ -10,6 +10,13 @@ from datetime import datetime
 import imageio
 import copy
 import argparse
+import cairosvg
+import io
+import tempfile
+import subprocess
+import re
+import xml.etree.ElementTree as ET
+from skimage.morphology import skeletonize, dilation, square
 
 # Add the models directory to the path to import local modules
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,7 +37,7 @@ class TPSInbetweenWrapper:
     Normalized interface for the consolidated Animation AI backend.
     """
     
-    def __init__(self, model_path=None, device=None, use_cpu=False):
+    def __init__(self, model_path=None, device=None, use_cpu=False, no_edge_sharpen=False, vector_cleanup=False, uniform_thin=False):
         """
         Initialize the TPS-Inbetween wrapper.
         
@@ -38,6 +45,9 @@ class TPSInbetweenWrapper:
             model_path (str): Path to the pretrained model weights (auto-detected if None)
             device (str): Device to run the model on ('cuda', 'mps', or 'cpu')
             use_cpu (bool): Force CPU usage if True
+            no_edge_sharpen (bool): Disable edge sharpening if True
+            vector_cleanup (bool): Enable Potrace vector-guidance clean-up if True
+            uniform_thin (bool): Enable uniform-thickness skeletonization if True
         """
         # Auto-detect model path if not provided
         if model_path is None:
@@ -65,7 +75,19 @@ class TPSInbetweenWrapper:
         self.matching_model = None
         self.inbetween_model = None
         
+        # Edge sharpening flag
+        self.edge_sharpen = not no_edge_sharpen
+        
+        # Vector cleanup flag
+        self.vector_cleanup = vector_cleanup
+        
+        # Uniform thickness skeletonization flag
+        self.uniform_thin = uniform_thin
+        
         print(f"TPS-Inbetween wrapper initialized with device: {self.device}")
+        print(f"Edge sharpening: {'enabled' if self.edge_sharpen else 'disabled'}")
+        print(f"Vector cleanup: {'enabled' if self.vector_cleanup else 'disabled'}")
+        print(f"Uniform thickness: {'enabled' if self.uniform_thin else 'disabled'}")
         
         # Initialize models
         self._load_models()
@@ -127,6 +149,133 @@ class TPSInbetweenWrapper:
         self.inbetween_model = self.inbetween_model.to(self.device).eval()
         
         print("Models loaded successfully!")
+    
+    def _vector_cleanup(self, pil_img: Image.Image, stroke: int = 2) -> Image.Image:
+        """Potrace (via CLI) → SVG → raster; returns cleaned PIL.Image in 'L' mode. Saves intermediates for debugging."""
+        try:
+            import shutil
+            # More robust adaptive thresholding
+            gray = pil_img.convert("L")
+            np_img = np.array(gray)
+            # Use Otsu's threshold if available, else fallback
+            try:
+                import cv2
+                _, binary = cv2.threshold(np_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            except ImportError:
+                # Fallback: use fixed threshold
+                binary = (np_img > 128).astype(np.uint8) * 255
+            bw = Image.fromarray(binary.astype(np.uint8), mode="L")
+            with tempfile.TemporaryDirectory() as tmpdir:
+                debug_dir = os.path.join(os.getcwd(), "vector_cleanup_debug")
+                os.makedirs(debug_dir, exist_ok=True)
+                png_path = os.path.join(tmpdir, "input.png")
+                pbm_path = os.path.join(tmpdir, "input.pbm")
+                svg_path = os.path.join(tmpdir, "output.svg")
+                # Save as PNG
+                bw.save(png_path, format="PNG")
+                shutil.copy(png_path, os.path.join(debug_dir, "debug_input.png"))
+                # Convert PNG to PBM using ImageMagick
+                subprocess.run(["magick", "convert", png_path, pbm_path], check=True)
+                shutil.copy(pbm_path, os.path.join(debug_dir, "debug_input.pbm"))
+                # Call potrace CLI with PBM input
+                cmd = ["potrace", pbm_path, "-s", "-o", svg_path, "--turdsize=2"]
+                subprocess.run(cmd, check=True, capture_output=True)
+                shutil.copy(svg_path, os.path.join(debug_dir, "debug_output.svg"))
+                # Read SVG, adjust stroke width
+                with open(svg_path, "r") as f:
+                    svg_data = f.read()
+                # Check if SVG has content
+                if "<path" not in svg_data:
+                    print("Warning: SVG contains no paths, returning original image")
+                    return pil_img
+                # Patch SVG: add white background, force stroke/width/fill, ensure viewBox/size
+                try:
+                    tree = ET.ElementTree(ET.fromstring(svg_data))
+                    root = tree.getroot()
+                    # Set width/height/viewBox
+                    root.set('width', str(pil_img.width))
+                    root.set('height', str(pil_img.height))
+                    root.set('viewBox', f'0 0 {pil_img.width} {pil_img.height}')
+                    # Add white background rect as first child
+                    bg = ET.Element('rect', {
+                        'x': '0', 'y': '0',
+                        'width': str(pil_img.width),
+                        'height': str(pil_img.height),
+                        'fill': 'white', 'stroke': 'none'
+                    })
+                    root.insert(0, bg)
+                    # Force all paths to have stroke/width/fill
+                    for path in root.iter('path'):
+                        path.set('stroke', 'black')
+                        path.set('stroke-width', str(stroke))
+                        path.set('fill', 'none')
+                    svg_data = ET.tostring(root, encoding='unicode')
+                except Exception as svg_patch_exc:
+                    print(f"Warning: SVG patching failed: {svg_patch_exc}")
+                # Save possibly modified SVG for inspection
+                with open(os.path.join(debug_dir, "debug_output_mod.svg"), "w") as f:
+                    f.write(svg_data)
+                # Rasterize SVG to PNG bytes
+                png_bytes = cairosvg.svg2png(bytestring=svg_data.encode(), output_width=pil_img.width, output_height=pil_img.height)
+                out_img = Image.open(io.BytesIO(png_bytes)).convert("L")
+                out_img.save(os.path.join(debug_dir, "debug_final.png"))
+                return out_img
+        except Exception as e:
+            print(f"Warning: Vector cleanup failed ({e}), returning original image")
+            return pil_img
+    
+    def _thin(self, pil_img: Image.Image) -> Image.Image:
+        """Thin input image to 1-pixel skeleton for uniform thickness processing."""
+        # Convert to grayscale and invert so black lines become white for skeletonization
+        gray = pil_img.convert("L")
+        # Invert: black lines (0) become white (255), white background (255) becomes black (0)
+        inverted = Image.eval(gray, lambda x: 255 - x)
+        
+        # Apply skeletonization to the inverted image (white lines on black background)
+        arr = np.array(inverted) > 128  # White pixels (>128) become True
+        thin = skeletonize(arr)
+        
+        # Convert back and invert to restore original color scheme
+        thin_img = Image.fromarray((thin * 255).astype(np.uint8)).convert("L")
+        # Invert back: white skeleton (255) becomes black lines (0)
+        result = Image.eval(thin_img, lambda x: 255 - x)
+        
+        return result
+
+    def _rehydrate(self, pil_img: Image.Image, thickness: int = 2) -> Image.Image:
+        """Rehydrate skeletonized image back to specified thickness."""
+        # Invert: black lines (0) become white (255) for dilation
+        inverted = Image.eval(pil_img, lambda x: 255 - x)
+        
+        # Apply dilation to the inverted image
+        arr = np.array(inverted) > 128  # White pixels (>128) become True
+        fat = dilation(arr, square(thickness))
+        
+        # Convert back and invert to restore original color scheme
+        fat_img = Image.fromarray((fat * 255).astype(np.uint8)).convert("L")
+        # Invert back: white dilated lines (255) become black lines (0)
+        result = Image.eval(fat_img, lambda x: 255 - x)
+        
+        return result
+    
+    def _edge_sharpen(self, tensor, alpha: float = 0.0, iters: int = 0):
+        """
+        Lightly sharpen a 1×1×H×W gray tensor by boosting Canny edges (conservative version).
+        Only boosts where edges are present, with a small alpha and no dilation.
+        Keeps tensor in original [0–1] range and on the same device.
+        """
+        img = tensor.squeeze().detach().cpu().numpy()  # H×W float32
+        if img.ndim == 3:
+            img = img[0]  # In case shape is (1, H, W)
+        gray_u8 = (img * 255).astype(np.uint8)
+        edges = cv2.Canny(gray_u8, 50, 150)
+        if iters > 0:
+            edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=iters)
+        # Only boost where edges are present, and scale by img value
+        sharp = np.clip(img + alpha * (edges / 255.0) * img, 0.0, 1.0)
+        sharp_tensor = torch.from_numpy(sharp).float().to(tensor.device)
+        # Return as (1,1,H,W)
+        return sharp_tensor.unsqueeze(0).unsqueeze(0)
     
     def _pad_to_multiple_of_8(self, tensor):
         """
@@ -205,6 +354,13 @@ class TPSInbetweenWrapper:
         # Load and aspect-ratio resize both images
         tensor0, pil0 = self._img_open_torch(img0_path, max_size=max_image_size)
         tensor1, pil1 = self._img_open_torch(img1_path, max_size=max_image_size)
+        
+        # Apply skeletonization if uniform thickness is enabled
+        if self.uniform_thin:
+            print("Applying skeletonization to input images for uniform thickness...")
+            pil0 = self._thin(pil0)
+            pil1 = self._thin(pil1)
+        
         # Find minimum common size
         w0, h0 = pil0.size
         w1, h1 = pil1.size
@@ -300,7 +456,7 @@ class TPSInbetweenWrapper:
         with torch.no_grad():
             pred, _ = self.inbetween_model(1 - torch_gray0_padded, 1 - torch_gray1_padded, [matches_path])
         
-        pred = [1 - p for p in pred]
+        pred = [self._edge_sharpen(1 - p) if self.edge_sharpen else (1 - p) for p in pred]
         
         # Crop back to original size
         print(f"Cropping results back to original size {original_h}x{original_w}...")
@@ -334,6 +490,10 @@ class TPSInbetweenWrapper:
         
         # Convert to PIL and save
         output_img = torchvision.transforms.ToPILImage()(output_frame.float().squeeze(0))
+        if self.vector_cleanup:
+            output_img = self._vector_cleanup(output_img)
+        if self.uniform_thin:
+            output_img = self._rehydrate(output_img)
         output_img.save(output_path)
         
         # Save intermediate frames if requested
@@ -343,7 +503,12 @@ class TPSInbetweenWrapper:
             
             for idx, frame in enumerate(pred):
                 frame_path = os.path.join(intermediate_dir, f'frame_{idx+1}.png')
-                torchvision.transforms.ToPILImage()(frame.float().squeeze(0)).save(frame_path)
+                pil_frame = torchvision.transforms.ToPILImage()(frame.float().squeeze(0))
+                if self.vector_cleanup:
+                    pil_frame = self._vector_cleanup(pil_frame)
+                if self.uniform_thin:
+                    pil_frame = self._rehydrate(pil_frame)
+                pil_frame.save(frame_path)
         
         # Create GIF if requested
         gif_path = None
@@ -376,6 +541,10 @@ class TPSInbetweenWrapper:
         # Save intermediate frames
         for frame in pred:
             pil_frame = torchvision.transforms.ToPILImage()(frame.float().squeeze(0))
+            if self.vector_cleanup:
+                pil_frame = self._vector_cleanup(pil_frame)
+            if self.uniform_thin:
+                pil_frame = self._rehydrate(pil_frame)
             pil_frames.append(pil_frame)
         # Save input frame 1
         pil_frame1 = torchvision.transforms.ToPILImage()(torch_gray1.float().squeeze(0))
@@ -426,7 +595,7 @@ class TPSInbetweenWrapper:
         with torch.no_grad():
             pred, _ = self.inbetween_model(1 - torch_gray0, 1 - torch_gray1, [matches_path])
         
-        pred = [1 - p for p in pred]
+        pred = [self._edge_sharpen(1 - p) if self.edge_sharpen else (1 - p) for p in pred]
         
         # Save individual frames
         frames_dir = os.path.join(output_dir, 'frames')
@@ -441,7 +610,12 @@ class TPSInbetweenWrapper:
         # Save intermediate frames
         for idx, frame in enumerate(pred):
             frame_path = os.path.join(frames_dir, f'{idx+1}.png')
-            torchvision.transforms.ToPILImage()(frame.float().squeeze(0)).save(frame_path)
+            pil_frame = torchvision.transforms.ToPILImage()(frame.float().squeeze(0))
+            if self.vector_cleanup:
+                pil_frame = self._vector_cleanup(pil_frame)
+            if self.uniform_thin:
+                pil_frame = self._rehydrate(pil_frame)
+            pil_frame.save(frame_path)
         
         # Create GIF
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -470,6 +644,9 @@ def main():
     parser.add_argument('--sequence', action='store_true', help='Generate full sequence as GIF')
     parser.add_argument('--model_path', help='Path to model weights (auto-detected if not specified)')
     parser.add_argument('--cpu', action='store_true', help='Use CPU only')
+    parser.add_argument('--no_edge_sharpen', action='store_true', help='Disable edge sharpening')
+    parser.add_argument('--vector_cleanup', action='store_true', help='Enable Potrace vector-guidance clean-up')
+    parser.add_argument('--uniform_thin', action='store_true', help='Enable uniform-thickness skeletonization')
     parser.add_argument('--temp_dir', default='./temp', help='Temporary directory')
     
     args = parser.parse_args()
@@ -477,7 +654,10 @@ def main():
     # Initialize wrapper
     wrapper = TPSInbetweenWrapper(
         model_path=args.model_path,
-        use_cpu=args.cpu
+        use_cpu=args.cpu,
+        no_edge_sharpen=args.no_edge_sharpen,
+        vector_cleanup=args.vector_cleanup,
+        uniform_thin=args.uniform_thin
     )
     
     if args.sequence:

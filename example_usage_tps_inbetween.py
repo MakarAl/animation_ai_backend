@@ -40,6 +40,12 @@ def main():
                        help='Duration per frame in GIF (default: 0.05 seconds)')
     parser.add_argument('--num_frames', type=int, default=1,
                        help='Number of intermediate frames to generate (default: 1)')
+    parser.add_argument('--no_edge_sharpen', action='store_true',
+                       help='Disable edge sharpening (enabled by default)')
+    parser.add_argument('--vector_cleanup', action='store_true',
+                       help='Enable Potrace vector-guidance clean-up')
+    parser.add_argument('--uniform_thin', action='store_true',
+                       help='Enable uniform-thickness skeletonization for consistent stroke width')
     parser.add_argument('--output_dir', default='test_outputs',
                        help='Output directory (default: test_outputs)')
     parser.add_argument('--temp_dir', default='temp',
@@ -75,6 +81,9 @@ def main():
     print(f"Output: {output_path}")
     print(f"Max size: {args.size}")
     print(f"Device: {args.device or 'auto-detect'}")
+    print(f"Edge sharpening: {'disabled' if args.no_edge_sharpen else 'enabled'}")
+    print(f"Vector cleanup: {'enabled' if args.vector_cleanup else 'disabled'}")
+    print(f"Uniform thickness: {'enabled' if args.uniform_thin else 'disabled'}")
     print(f"Create GIF: {args.gif}")
     print(f"Number of frames: {args.num_frames}")
     print("=" * 60)
@@ -82,7 +91,12 @@ def main():
     try:
         # Initialize the wrapper
         print("\nInitializing TPS-Inbetween wrapper...")
-        wrapper = TPSInbetweenWrapper(device=args.device)
+        wrapper = TPSInbetweenWrapper(
+            device=args.device, 
+            no_edge_sharpen=args.no_edge_sharpen,
+            vector_cleanup=args.vector_cleanup,
+            uniform_thin=args.uniform_thin
+        )
         
         # Generate inbetween frame(s)
         print(f"\nGenerating inbetween frame(s)...")
@@ -119,6 +133,9 @@ def main():
             
             if args.gif:
                 print(f"✓ GIF saved to: {output_path}")
+            
+            if args.uniform_thin:
+                print("✓ Uniform thickness processing applied")
             
             print(f"Timestamp: {timestamp}")
             print("=" * 60)

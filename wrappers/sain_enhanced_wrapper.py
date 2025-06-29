@@ -16,7 +16,9 @@ from datetime import datetime
 # Set up model directory for consolidated backend
 current_dir = os.path.dirname(os.path.abspath(__file__))
 models_dir = os.path.join(os.path.dirname(current_dir), 'models', 'SAIN')
-sys.path.insert(0, models_dir)
+sain_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'models', 'SAIN')
+if sain_dir not in sys.path:
+    sys.path.insert(0, sain_dir)
 
 from SAIN import SAIN
 
