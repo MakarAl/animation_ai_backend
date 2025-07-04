@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Script to generate inbetweens for multiple scenes using TPS and RIFE models.
+Clean experiment script for generating inbetweens on multiple scenes.
 
 This script processes consecutive pairs of keyframes and generates inbetween frames
-with the following models and configurations:
+with the following models:
 - TPS-Inbetween (with/without vector cleanup)
 - RIFE (baseline)
 
@@ -13,12 +13,11 @@ All experiments use:
 - no_edge_sharpen = true
 - no uniform_thin = true
 
-The script creates individual inbetweens, final combined GIFs, and detailed log files for each model+scene combination.
+The script creates individual inbetweens, final combined GIFs, and detailed log files.
 """
 
 import os
 import sys
-import glob
 import time
 from datetime import datetime
 from pathlib import Path
@@ -26,21 +25,11 @@ import imageio
 from PIL import Image
 import numpy as np
 
-# Patch sys.path for RIFE/SAIN model imports
-import sys, os
-backend_dir = os.path.dirname(os.path.abspath(__file__))
-rife_dir = os.path.join(backend_dir, 'models', 'RIFE')
-rife_model_dir = os.path.join(rife_dir, 'model')
-rife_train_log_dir = os.path.join(rife_dir, 'train_log')
-for p in [backend_dir, rife_dir, rife_model_dir, rife_train_log_dir]:
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
-# Add the current directory to the path to import the wrappers
+# Add current directory to path for wrapper imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
+sys.path.insert(0, current_dir)
 
-# Import wrappers directly - no error handling to hide real issues
+# Import wrappers
 from wrappers.tps_inbetween_wrapper import TPSInbetweenWrapper
 from wrappers.rife_wrapper import RIFEInterpolator
 
@@ -202,7 +191,6 @@ def run_experiment(experiment_name, wrapper, frame_paths, frame_numbers, output_
     # Initialize wrapper timing
     wrapper_init_start = time.time()
     print(f"Initializing {experiment_name} wrapper...")
-    # Note: Wrapper is already initialized, just timing the process
     wrapper_init_time = time.time() - wrapper_init_start
     print(f"✓ Wrapper ready in {format_time(wrapper_init_time)}")
     
