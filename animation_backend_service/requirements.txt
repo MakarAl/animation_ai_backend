@@ -1,0 +1,38 @@
+# FastAPI and web server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Database and ORM
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+alembic==1.12.1
+
+# Task queue
+celery==5.3.4
+redis==5.0.1
+
+# Supabase integration
+supabase==2.0.2
+python-jose[cryptography]==3.3.0
+
+# Data validation
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Image processing
+Pillow==10.1.0
+opencv-python==4.8.1.78
+
+# Deep learning (for TPS model)
+torch==2.1.1
+torchvision==0.16.1
+
+# Additional dependencies for TPS model
+cairosvg==2.8.2
+numpy==1.24.3
+scipy==1.11.4
+
+# Utilities
+python-dotenv==1.0.0
+httpx==0.24.1

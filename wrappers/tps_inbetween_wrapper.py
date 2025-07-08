@@ -563,75 +563,115 @@ class TPSInbetweenWrapper:
         imageio.mimsave(gif_path, frames, duration=duration)
         return gif_path
     
-    def interpolate_sequence(self, img0_path, img1_path, output_dir=None, num_frames=30, 
-                           temp_dir='./temp'):
+    def interpolate_sequence(self, img0_path, img1_path, output_dir=None, timesteps=None, temp_dir='./temp', create_gif=False, gif_duration=0.05, max_image_size=512):
         """
-        Generate a sequence of inbetween frames and save as GIF.
-        
+        Generate a sequence of inbetween frames at arbitrary timesteps, and optionally a GIF.
         Args:
             img0_path (str): Path to the first input image
             img1_path (str): Path to the second input image
             output_dir (str): Directory to save output files
-            num_frames (int): Number of intermediate frames to generate
+            timesteps (list of float): List of t values (0 < t < 1) at which to generate inbetweens
             temp_dir (str): Directory for temporary files
-            
+            create_gif (bool): Whether to create a GIF of the sequence
+            gif_duration (float): Duration per frame in the GIF
+            max_image_size (int): Maximum image dimension for resizing inputs
         Returns:
-            str: Path to the saved GIF file
+            (List[str], Optional[str]): List of PNG frame paths, and GIF path if created
         """
+        import imageio
+        from PIL import Image
+
         if output_dir is None:
             output_dir = temp_dir
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(temp_dir, exist_ok=True)
-        
+
+        if timesteps is None or len(timesteps) == 0:
+            raise ValueError("You must provide a non-empty list of timesteps (floats between 0 and 1)")
+
         # Generate matches
         print("Generating matches between images...")
-        matches_path, torch_gray0, torch_gray1 = self._generate_matches(img0_path, img1_path, temp_dir)
-        
-        # Update model to generate requested number of frames
-        self.inbetween_model.times = torch.linspace(0, 1, num_frames + 1)[1:-1].to(self.device)
-        
+        matches_path, torch_gray0, torch_gray1 = self._generate_matches(img0_path, img1_path, temp_dir, max_image_size=max_image_size)
+
+        # Store original dimensions for cropping back
+        original_h, original_w = torch_gray0.shape[2], torch_gray0.shape[3]
+
+        # Pad images to multiples of 8 to avoid IFNet size mismatches (same as interpolate)
+        print(f"Padding images from {original_h}x{original_w} to multiples of 8...")
+        torch_gray0_padded, pad_info = self._pad_to_multiple_of_8(torch_gray0)
+        torch_gray1_padded, _ = self._pad_to_multiple_of_8(torch_gray1)
+        padded_h, padded_w = torch_gray0_padded.shape[2], torch_gray0_padded.shape[3]
+        print(f"Padded to {padded_h}x{padded_w} (multiple of 8)")
+
+        # Crop both tensors to minimum common size to avoid rounding issues
+        torch_gray0_padded, torch_gray1_padded = self._crop_to_min_size(torch_gray0_padded, torch_gray1_padded)
+
+        # Set model times to the provided timesteps
+        self.inbetween_model.times = torch.tensor(timesteps).to(self.device)
+
         # Generate inbetween frames
-        print(f"Generating {num_frames} inbetween frames...")
+        print(f"Generating {len(timesteps)} inbetween frames at t={timesteps} ...")
         with torch.no_grad():
-            pred, _ = self.inbetween_model(1 - torch_gray0, 1 - torch_gray1, [matches_path])
-        
+            pred, _ = self.inbetween_model(1 - torch_gray0_padded, 1 - torch_gray1_padded, [matches_path])
+
         pred = [self._edge_sharpen(1 - p) if self.edge_sharpen else (1 - p) for p in pred]
-        
+
+        # Crop back to original size
+        print(f"Cropping results back to original size {original_h}x{original_w}...")
+        pred = [self._crop_to_original_size(p, original_h, original_w) for p in pred]
+
         # Save individual frames
         frames_dir = os.path.join(output_dir, 'frames')
         os.makedirs(frames_dir, exist_ok=True)
-        
-        # Save input frames
-        torchvision.transforms.ToPILImage()(torch_gray0.float().squeeze(0)).save(
-            os.path.join(frames_dir, '0.png'))
-        torchvision.transforms.ToPILImage()(torch_gray1.float().squeeze(0)).save(
-            os.path.join(frames_dir, f'{len(pred)+1}.png'))
-        
-        # Save intermediate frames
+
+        output_paths = []
         for idx, frame in enumerate(pred):
-            frame_path = os.path.join(frames_dir, f'{idx+1}.png')
+            frame_path = os.path.join(frames_dir, f'frame_t{timesteps[idx]:.2f}.png')
             pil_frame = torchvision.transforms.ToPILImage()(frame.float().squeeze(0))
             if self.vector_cleanup:
                 pil_frame = self._vector_cleanup(pil_frame)
             if self.uniform_thin:
                 pil_frame = self._rehydrate(pil_frame)
             pil_frame.save(frame_path)
-        
-        # Create GIF
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        gif_path = os.path.join(output_dir, f'tps_sequence_{timestamp}.gif')
-        
-        # Collect all frame paths
-        frame_paths = [os.path.join(frames_dir, f'{i}.png') for i in range(num_frames + 1)]
-        
-        # Create GIF
-        frames = []
-        for frame_path in frame_paths:
-            frames.append(imageio.v2.imread(frame_path))
-        imageio.mimsave(gif_path, frames, duration=0.05)
-        
-        print(f"Sequence saved to: {gif_path}")
-        return gif_path
+            output_paths.append(frame_path)
+
+        print(f"Saved {len(output_paths)} inbetween frames to {frames_dir}")
+
+        gif_path = None
+        if create_gif:
+            # Collect all frame paths: start, inbetweens, end
+            all_frames = []
+            # Save/copy input frames as PNGs in the same directory (resized/cropped to match inbetweens)
+            def pil_from_tensor(tensor):
+                return torchvision.transforms.ToPILImage()(tensor.float().squeeze(0))
+            # Crop input tensors to original size (for consistency)
+            pil_start = pil_from_tensor(self._crop_to_original_size(torch_gray0, original_h, original_w))
+            pil_end = pil_from_tensor(self._crop_to_original_size(torch_gray1, original_h, original_w))
+            # Ensure all images are the same size as the first inbetween (or as the model output)
+            if len(output_paths) > 0:
+                ref_img = Image.open(output_paths[0])
+                target_size = ref_img.size
+            else:
+                target_size = pil_start.size
+            pil_start = pil_start.resize(target_size, Image.LANCZOS)
+            pil_end = pil_end.resize(target_size, Image.LANCZOS)
+            # Save start and end as PNGs for consistency
+            start_path = os.path.join(frames_dir, 'frame_start.png')
+            end_path = os.path.join(frames_dir, 'frame_end.png')
+            pil_start.save(start_path)
+            pil_end.save(end_path)
+            all_frames.append(start_path)
+            all_frames.extend(output_paths)
+            all_frames.append(end_path)
+            # Read all images and ensure same size
+            images = [Image.open(p).resize(target_size, Image.LANCZOS) for p in all_frames]
+            # Convert to numpy arrays for imageio
+            images_np = [np.array(img) for img in images]
+            gif_path = os.path.join(output_dir, 'tps_sequence.gif')
+            imageio.mimsave(gif_path, images_np, duration=gif_duration)
+            print(f"GIF saved to: {gif_path}")
+
+        return output_paths, gif_path
 
 
 def main():
