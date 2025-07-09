@@ -9,8 +9,8 @@ from api.config import settings
 # Create Celery app
 celery_app = Celery(
     "animation_backend",
-    broker=settings.redis_url,
-    backend=settings.redis_url,
+    broker=settings.REDIS_URL,
+    backend=settings.REDIS_URL,
     include=["worker.tasks"]
 )
 
@@ -25,5 +25,5 @@ celery_app.conf.update(
     task_time_limit=30 * 60,  # 30 minutes
     task_soft_time_limit=25 * 60,  # 25 minutes
     worker_prefetch_multiplier=1,
-    worker_concurrency=settings.worker_concurrency,
+    worker_concurrency=settings.WORKER_CONCURRENCY,
 )

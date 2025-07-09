@@ -4,23 +4,23 @@ from typing import Optional
 
 class Settings(BaseSettings):
     # Supabase Configuration
-    supabase_url: str
-    supabase_anon_key: str
-    supabase_service_key: str
+    SUPABASE_URL: str
+    SUPABASE_ANON_KEY: str
+    SUPABASE_SERVICE_KEY: str
     
     # Redis Configuration
-    redis_url: str = "redis://localhost:6379/0"
+    REDIS_URL: str = "redis://localhost:6379/0"
     
     # Application Configuration
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
-    worker_concurrency: int = 1
+    API_HOST: str = "0.0.0.0"
+    API_PORT: int = 8000
+    WORKER_CONCURRENCY: int = 1
     
     # Storage Configuration
-    storage_bucket: str = "inbetweens"
+    STORAGE_BUCKET: str = "inbetweens"
     
     class Config:
-        env_file = ".env"
+        env_file = "api/.env"
         case_sensitive = False
 
 

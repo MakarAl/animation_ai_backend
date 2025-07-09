@@ -8,7 +8,8 @@ from .config import settings
 
 # For now, we'll use a simple SQLite database for local testing
 # TODO: Replace with Supabase PostgreSQL connection
-DATABASE_URL = "sqlite:///./test.db"
+import os
+DATABASE_URL = f"sqlite:///{os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'test.db')}"
 
 # Create SQLAlchemy engine
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
