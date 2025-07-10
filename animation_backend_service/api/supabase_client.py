@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import uuid
 from typing import Optional
+from datetime import datetime
 
 from supabase import create_client, Client
 
@@ -138,17 +139,21 @@ def insert_uploaded_file(*, scene_id: str, original_id: str, name: str, url: str
 
 def insert_timeline_slot(*, project_id: str, slot_index: int, file_id: str, slot_type: str = "generated") -> str:
     supabase = get_supabase()
+    payload = {
+        "project_id": project_id,
+        "slot_index": slot_index,
+        "file_id": file_id,
+        "type": slot_type,  # now defaults to 'generated'
+        "locked": False,
+        "updated_at": datetime.utcnow().isoformat(),  # Always update
+    }
+    print(f"[DEBUG] Upserting timeline slot with payload: {payload}")
     res = (
         supabase.table("timeline_slots")
-        .upsert({
-            "project_id": project_id,
-            "slot_index": slot_index,
-            "file_id": file_id,
-            "type": slot_type,  # now defaults to 'generated'
-            "locked": False,
-        }, on_conflict="project_id,slot_index")
+        .upsert(payload, on_conflict="project_id,slot_index")
         .execute()
     )
+    print(f"[DEBUG] Upsert response: status_code={getattr(res, 'status_code', None)}, data={getattr(res, 'data', None)}, text={getattr(res, 'text', None)}")
     if hasattr(res, 'status_code') and res.status_code >= 400:
         raise RuntimeError(f"insert_timeline_slot failed: {getattr(res, 'text', '')}")
     data = getattr(res, 'data', None)

@@ -10,13 +10,21 @@
 - [x] Update job status and result endpoints to use Supabase URLs
 - [x] Ensure frontend integration works with Supabase data flow
 
-## 🔧 PENDING: Cleanup & Frontend Updates
-- [ ] **Cleanup**: Remove temp static mount for serving images externally; keep local temp only for processing
-- [ ] **Frontend Updates**: 
-  - [ ] Ensure `submitInterpolationJob` includes user_id/project_id/scene_id
-  - [ ] Update polling & display logic to use Supabase URLs
-  - [ ] Refresh project browser & timeline after job completion by listening for new uploaded_files and timeline_slots rows
-- [ ] **Testing**: Delete local test.db file and related tests or adapt tests to Supabase mocks
+## ✅ COMPLETED: Cleanup & Frontend Updates (2025-07-10)
+- [x] **Cleanup**: Remove temp static mount for serving images externally; keep local temp only for processing
+- [x] **Frontend Updates**: 
+  - [x] Ensure `submitInterpolationJob` includes user_id/project_id/scene_id
+  - [x] Update polling & display logic to use Supabase URLs
+  - [x] Refresh project browser & timeline after job completion by listening for new uploaded_files and timeline_slots rows
+- [x] **Testing**: Delete local test.db file and related tests or adapt tests to Supabase mocks
+
+## ✅ COMPLETED: Real-time Timeline Updates (2025-07-10)
+- [x] **Fixed**: Allow dragging both keyframes and generated frames on timeline
+- [x] **Fixed**: Real-time timeline updates not working after job completion
+- [x] **Fixed**: Supabase real-time replication not enabled for timeline_slots table
+- [x] **Fixed**: Frontend timeline slot updates not triggering real-time events
+- [x] **Added**: Enhanced debugging for real-time subscription status and events
+- [x] **Added**: Migration to enable real-time replication for timeline_slots, uploaded_files, and project_settings tables
 
 ## User Experience
 - [ ] Add visual indicator for empty slots in the timeline and preview (e.g., checkerboard or faded overlay)
@@ -47,4 +55,4 @@
 
 ---
 
-_Last updated: 2025-07-10_ 
+_Last updated: 2025-07-10 (Real-time Timeline Updates completed)_ 

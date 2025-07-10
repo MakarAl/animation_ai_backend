@@ -13,8 +13,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Mount static files
-app.mount("/temp", StaticFiles(directory="temp"), name="temp")
+# Static file serving removed - now using Supabase Storage for all file serving
 
 
 # Add CORS middleware

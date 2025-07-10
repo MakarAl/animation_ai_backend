@@ -94,5 +94,5 @@ if __name__ == "__main__":
         sys.exit(1)
     
     print("=" * 50)
-    print("✅ TPS integration test completed successfully!")
+    print("✅ TPS model integration test completed successfully!")
     print("The TPS wrapper is ready to be used in the backend.")
