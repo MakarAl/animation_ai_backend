@@ -53,6 +53,27 @@
 - [ ] Add background job queue monitoring and management
 - [ ] Optimize Supabase queries and storage usage
 
+## Onion Skinning Improvements
+### Quick Wins
+- [ ] Show multiple ghost frames with configurable range (-3 … +3)
+- [ ] Skip duplicate frames created by hold-last-frame logic
+- [ ] Expose onion-skin settings (range, opacity, tint, direction) via UI pop-over
+- [ ] Improve colouring (greyscale tint + `multiply` blend mode) for readability
+- [ ] Pre-load and cache ghost images to avoid flicker
+
+### Phase 2 – Performance & UX
+- [ ] Introduce image caching & pre-loading optimisation
+- [ ] Add keyboard shortcuts: `O` toggle, `[` / `]` adjust range
+- [ ] Persist onion-skin preferences in localStorage / user profile
+
+### Phase 3 – Canvas Renderer
+- [ ] Replace stacked `<img>` layers with a Canvas 2D compositor for better performance
+- [ ] Investigate WebGL shader for tint / opacity ramp
+
+### Phase 4 – Shared Logic
+- [ ] Extract a reusable `useOnionSkin` hook for preview player, future drawing canvas, and timeline thumbnails
+- [ ] Ensure onion-skin feature works during scrubbing and playback across components
+
 ---
 
-_Last updated: 2025-07-10 (Real-time Timeline Updates completed)_ 
+_Last updated: 2025-07-10 (Onion Skinning plan added)_
