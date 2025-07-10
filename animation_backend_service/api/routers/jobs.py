@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 
 from ..database import get_db, Job
+from ..supabase_client import upload_bytes_to_bucket
 from ..schemas import JobCreateResponse, JobResponse, InterpolateRequest, InterpolateSequenceRequest, JobSequenceResponse
 from ..config import settings
 
@@ -35,6 +36,9 @@ async def create_interpolation_job(
     vector_cleanup: bool = Form(False),
     no_edge_sharpen: bool = Form(True),
     uniform_thin: bool = Form(False),
+    project_id: str = Form(...),
+    scene_id: str = Form(...),
+    user_id: str = Form(...),
     db: Session = Depends(get_db)
 ):
     """
@@ -57,28 +61,49 @@ async def create_interpolation_job(
         
         # Generate job ID first
         job_id = str(uuid.uuid4())
-        
-        # Create job record in database
+
+        # Upload keyframes to Supabase Storage (bucket: frames)
+        key0_bytes = await keyframe_0.read()
+        key1_bytes = await keyframe_1.read()
+
+        keyframe_0_url_public = upload_bytes_to_bucket(
+            bucket="frames",
+            content=key0_bytes,
+            mime_type=keyframe_0.content_type,
+            user_scope=user_id,
+            extension=keyframe_0.filename.split(".")[-1],
+        )
+        keyframe_1_url_public = upload_bytes_to_bucket(
+            bucket="frames",
+            content=key1_bytes,
+            mime_type=keyframe_1.content_type,
+            user_scope=user_id,
+            extension=keyframe_1.filename.split(".")[-1],
+        )
+
+        # Create job record in database using Supabase URLs
         job = Job(
             id=job_id,
-            user_id="mock-user-id",  # TODO: Extract from JWT token
+            user_id=user_id,
+            project_id=project_id,
+            scene_id=scene_id,
             status="PENDING",
-            keyframe_0_url=f"temp/{job_id}_keyframe_0.jpg",  # TODO: Upload to Supabase Storage
-            keyframe_1_url=f"temp/{job_id}_keyframe_1.jpg",  # TODO: Upload to Supabase Storage
+            keyframe_0_url=keyframe_0_url_public,
+            keyframe_1_url=keyframe_1_url_public,
             params=json.dumps(params),
-            created_at=datetime.utcnow()
+            created_at=datetime.utcnow(),
         )
         
         db.add(job)
         db.commit()
         db.refresh(job)
         
-        # Save uploaded files temporarily
+        # Optionally save local scratch copies for the worker
         os.makedirs("temp", exist_ok=True)
         with open(f"temp/{job_id}_keyframe_0.jpg", "wb") as f:
-            f.write(await keyframe_0.read())
+            f.write(key0_bytes)
         with open(f"temp/{job_id}_keyframe_1.jpg", "wb") as f:
-            f.write(await keyframe_1.read())
+            f.write(key1_bytes)
         
         # Start background task
         try:
@@ -110,6 +135,9 @@ async def create_interpolation_sequence_job(
     create_gif: bool = Form(False),
     gif_duration: float = Form(0.05),
     slots: Optional[str] = Form(None),  # JSON-encoded list of ints
+    project_id: str = Form(...),
+    scene_id: str = Form(...),
+    user_id: str = Form(...),
     db: Session = Depends(get_db)
 ):
     """
@@ -152,25 +180,47 @@ async def create_interpolation_sequence_job(
         
         # Generate job ID first
         job_id = str(uuid.uuid4())
-        # Create job record in database
+
+        # Upload keyframes to Supabase Storage
+        key0_bytes = await keyframe_0.read()
+        key1_bytes = await keyframe_1.read()
+
+        keyframe_0_url_public = upload_bytes_to_bucket(
+            bucket="frames",
+            content=key0_bytes,
+            mime_type=keyframe_0.content_type,
+            user_scope=user_id,
+            extension=keyframe_0.filename.split(".")[-1],
+        )
+        keyframe_1_url_public = upload_bytes_to_bucket(
+            bucket="frames",
+            content=key1_bytes,
+            mime_type=keyframe_1.content_type,
+            user_scope=user_id,
+            extension=keyframe_1.filename.split(".")[-1],
+        )
+
+        # Create job record
         job = Job(
             id=job_id,
-            user_id="mock-user-id",  # TODO: Extract from JWT token
+            user_id=user_id,
+            project_id=project_id,
+            scene_id=scene_id,
             status="PENDING",
-            keyframe_0_url=f"temp/{job_id}_keyframe_0.jpg",  # TODO: Upload to Supabase Storage
-            keyframe_1_url=f"temp/{job_id}_keyframe_1.jpg",  # TODO: Upload to Supabase Storage
+            keyframe_0_url=keyframe_0_url_public,
+            keyframe_1_url=keyframe_1_url_public,
             params=json.dumps(params),
-            created_at=datetime.utcnow()
+            created_at=datetime.utcnow(),
         )
         db.add(job)
         db.commit()
         db.refresh(job)
-        # Save uploaded files temporarily
+        # Save local scratch copies
         os.makedirs("temp", exist_ok=True)
         with open(f"temp/{job_id}_keyframe_0.jpg", "wb") as f:
-            f.write(await keyframe_0.read())
+            f.write(key0_bytes)
         with open(f"temp/{job_id}_keyframe_1.jpg", "wb") as f:
-            f.write(await keyframe_1.read())
+            f.write(key1_bytes)
         # Start background task
         try:
             interpolate_sequence_task.delay(job_id)
@@ -214,7 +264,7 @@ async def get_job_status(job_id: str, db: Session = Depends(get_db)):
             slots = None
     if result_urls:
         return JobSequenceResponse(
-            job_id=job.id,
+            job_id=str(job.id),
             status=job.status,
             created_at=job.created_at,
             processing_started_at=job.processing_started_at,
@@ -226,7 +276,7 @@ async def get_job_status(job_id: str, db: Session = Depends(get_db)):
         )
     # Otherwise, return JobResponse
     return JobResponse(
-        job_id=job.id,
+        job_id=str(job.id),
         status=job.status,
         created_at=job.created_at,
         processing_started_at=job.processing_started_at,
@@ -252,5 +302,6 @@ async def get_job_result(job_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Result file not found")
     
     # TODO: Return file from Supabase storage instead of local file
-    from fastapi.responses import FileResponse
-    return FileResponse(job.result_url, media_type="image/png")
+    from fastapi.responses import RedirectResponse
+    # Redirect to the Supabase public URL for the result image
+    return RedirectResponse(job.result_url)

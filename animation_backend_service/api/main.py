@@ -3,6 +3,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from .routers import jobs
 from .config import settings
+import os, pprint; pprint.pp(settings.SUPABASE_DB_URL)
+
 
 # Create FastAPI app
 app = FastAPI(

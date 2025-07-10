@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
     SUPABASE_SERVICE_KEY: str
+    SUPABASE_DB_URL: str  # SQLAlchemy-compatible Postgres URI
     
     # Redis Configuration
     REDIS_URL: str = "redis://localhost:6379/0"
